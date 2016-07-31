@@ -168,7 +168,8 @@ public class LocationService extends Service implements LocationStore.UpdateList
         double hours = (lastDelay)/((double)TimeUnit.HOURS.toMillis(1));
         double velocity = 100*1000; // in m/h
         if (hours > 0 && lastLocation != null) {
-            velocity = Math.max(velocity, currentLocation.distanceTo(lastLocation)/hours);
+            velocity = Math.max(velocity,
+                    (currentLocation.distanceTo(lastLocation)-destLocation.getRadius())/hours);
         }
         // extrapolate and halve
         // in hours
