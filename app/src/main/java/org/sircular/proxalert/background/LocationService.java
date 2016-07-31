@@ -165,16 +165,13 @@ public class LocationService extends Service implements LocationStore.UpdateList
 
     private long determineDelay(Location currentLocation, Location lastLocation,
                                     ProxLocation destLocation, long lastDelay) {
-        double hours = (lastDelay)/((double)TimeUnit.HOURS.toMillis(1));
-        double velocity = 100*1000; // in m/h
-        if (hours > 0 && lastLocation != null) {
+        double velocity = 100/* km/h */*1000/* km -> m *//(3600*1000)/* h -> ms */; // in m/ms
+        if (lastDelay > 0 && lastLocation != null) {
             velocity = Math.max(velocity,
-                    (currentLocation.distanceTo(lastLocation)-destLocation.getRadius())/hours);
+                    (currentLocation.distanceTo(lastLocation)-destLocation.getRadius())/lastDelay);
         }
         // extrapolate and halve
-        // in hours
         double estimatedTime = currentLocation.distanceTo(destLocation.getLocation())/(velocity*2);
-        estimatedTime = estimatedTime*TimeUnit.HOURS.toMillis(1);
         return (long)Math.max(MIN_DELAY, Math.min(MAX_DELAY, estimatedTime));
     }
 
