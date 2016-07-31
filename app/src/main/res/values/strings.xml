@@ -1,0 +1,32 @@
+<resources>
+    <string name="app_name">ProxAlert</string>
+    <string name="title_activity_prox_map_view">Map View</string>
+    <string name="no_locations_text">No Locations Yet</string>
+
+    <string name="access_show_locations">Show List of Locations</string>
+    <string name="access_hide_locations">Hide List of Locations</string>
+
+    <string name="hint_title">Title</string>
+    <string name="hint_radius">Radius</string>
+    <string-array name="distance_array">
+        <item>mi</item>
+        <item>km</item>
+    </string-array>
+    <string name="recurring">Recurring</string>
+
+    <string name="edit_marker">Edit marker?</string>
+    <string name="edit_marker_btn">Edit</string>
+    <string name="delete_marker_btn">Delete</string>
+    <string name="cancel_btn">Cancel</string>
+    <string name="save_btn">Save</string>
+    <string name="create_btn">Create</string>
+    <string name="create_title">Create Marker</string>
+    <string name="edit_title">Edit Marker</string>
+
+    <string name="fill_out_fields_msg">Please Fill Out All Fields</string>
+    <string name="use_location_msg">ProxAlert needs to use your location in order to give you notifications when you reach your destinations.</string>
+    <string name="ok_btn">OK</string>
+    <string name="dismiss_btn">Dismiss</string>
+
+    <string name="location_file">locations.json</string>
+</resources>
