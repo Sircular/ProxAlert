@@ -81,6 +81,7 @@ public class LocationService extends Service implements LocationStore.UpdateList
                 == PackageManager.PERMISSION_GRANTED) {
             Location currentLocation = LocationServices.FusedLocationApi.getLastLocation(apiClient);
             scheduleLocationCheck(currentLocation, lastLocation);
+            lastLocation = currentLocation;
         } else {
             // this activity will request permission when it opens
             Intent mainActivityIntent = new Intent(this, ProxAlertActivity.class);
@@ -110,12 +111,12 @@ public class LocationService extends Service implements LocationStore.UpdateList
                 if (currentLocation.distanceTo(closestLocation.getLocation()) <= closestLocation.getRadius()) {
                     if (!currentlyInside || !currentLocation.equals(lastLocation)) {
                         triggerNotification(closestLocation);
-                        if (!closestLocation.isRecurring()) {
+                        if (closestLocation.isRecurring()) {
+                            currentlyInside = true;
+                        } else {
                             LocationStore.removeLocation(closestLocation);
                             LocationStore.saveLocations();
                             removed = true;
-                        } else {
-                            currentlyInside = true;
                         }
                     }
                 } else {
@@ -165,7 +166,8 @@ public class LocationService extends Service implements LocationStore.UpdateList
 
     private long determineDelay(Location currentLocation, Location lastLocation,
                                     ProxLocation destLocation, long lastDelay) {
-        double velocity = 100/* km/h */*1000/* km -> m *//(3600*1000)/* h -> ms */; // in m/ms
+        // m/ms
+        double velocity = (100*1000)/TimeUnit.HOURS.toMillis(1);
         if (lastDelay > 0 && lastLocation != null) {
             velocity = Math.max(velocity,
                     (currentLocation.distanceTo(lastLocation)-destLocation.getRadius())/lastDelay);
