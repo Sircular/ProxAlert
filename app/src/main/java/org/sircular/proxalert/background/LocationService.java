@@ -109,7 +109,7 @@ public class LocationService extends Service implements LocationStore.UpdateList
             if (closestLocation != null) { // to be safe
                 boolean removed = false;
                 if (currentLocation.distanceTo(closestLocation.getLocation()) <= closestLocation.getRadius()) {
-                    if (!currentlyInside || !currentLocation.equals(lastLocation)) {
+                    if (!currentlyInside) {
                         triggerNotification(closestLocation);
                         if (closestLocation.isRecurring()) {
                             currentlyInside = true;
