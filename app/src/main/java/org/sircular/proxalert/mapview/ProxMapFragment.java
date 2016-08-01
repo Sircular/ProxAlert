@@ -12,6 +12,7 @@ import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.SupportMapFragment;
+import com.google.android.gms.maps.model.BitmapDescriptorFactory;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.LatLngBounds;
 import com.google.android.gms.maps.model.Marker;
@@ -21,6 +22,7 @@ import org.sircular.proxalert.LocationStore;
 import org.sircular.proxalert.Manifest;
 import org.sircular.proxalert.ProxAlertActivity;
 import org.sircular.proxalert.ProxLocation;
+import org.sircular.proxalert.R;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -106,8 +108,9 @@ public class ProxMapFragment extends SupportMapFragment implements LocationStore
         }
         // set up the search marker
         MarkerOptions searchOptions = new MarkerOptions();
-        searchOptions.alpha(0.8f);
         searchOptions.title("");
+        searchOptions.snippet(getActivity().getString(R.string.search_marker_snippet));
+        searchOptions.icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE));
         searchOptions.position(new LatLng(0, 0));
         searchOptions.visible(false);
         searchMarker = map.addMarker(searchOptions);

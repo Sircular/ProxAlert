@@ -23,6 +23,8 @@
     <string name="create_title">Create Marker</string>
     <string name="edit_title">Edit Marker</string>
 
+    <string name="search_marker_snippet">Tap to Add Reminder</string>
+
     <string name="fill_out_fields_msg">Please Fill Out All Fields</string>
     <string name="use_location_msg">ProxAlert needs to use your location in order to give you notifications when you reach your destinations.</string>
     <string name="ok_btn">OK</string>
