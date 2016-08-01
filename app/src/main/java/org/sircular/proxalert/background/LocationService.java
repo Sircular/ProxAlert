@@ -63,7 +63,7 @@ public class LocationService extends Service implements LocationStore.UpdateList
         apiClient.connect();
         triggerLocationCheck();
 
-        return START_NOT_STICKY;
+        return START_STICKY;
     }
 
     @Override
@@ -136,6 +136,8 @@ public class LocationService extends Service implements LocationStore.UpdateList
                     }, milliDelay);
                 } // else the listener will reschedule
             }
+        } else {
+            currentlyInside = false; // just to make sure it's initialized properly
         }
         // otherwise, nothing needs to be scheduled
     }
