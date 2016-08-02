@@ -147,6 +147,23 @@ public class ProxMapFragment extends SupportMapFragment implements LocationStore
             }
         });
 
+        map.setOnInfoWindowClickListener(new GoogleMap.OnInfoWindowClickListener() {
+            @Override
+            public void onInfoWindowClick(Marker marker) {
+                ProxAlertActivity parent = (ProxAlertActivity) getActivity();
+                ProxMapMarker proxMarker = getProxMarkerFromMapMarker(marker);
+                if (proxMarker != null) {
+                    parent.editLocation(proxMarker.getLocation());
+                } else if (marker.equals(searchMarker)) {
+                    LatLng position = searchMarker.getPosition();
+                    parent.createLocation((float)position.latitude, (float)position.longitude);
+                    searchMarker.setVisible(false);
+                } else {
+                    marker.remove(); // it's a trash marker
+                }
+            }
+        });
+
         map.setOnMarkerDragListener(new GoogleMap.OnMarkerDragListener() {
             @Override
             public void onMarkerDragStart(Marker marker) {}

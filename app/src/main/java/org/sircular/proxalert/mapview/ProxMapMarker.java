@@ -25,6 +25,7 @@ public class ProxMapMarker {
         markerOptions.position(new LatLng(location.getLatitude(), location.getLongitude()));
         markerOptions.title(location.getTitle());
         this.marker = map.addMarker(markerOptions);
+        this.marker.showInfoWindow();
 
         CircleOptions circleOptions = new CircleOptions();
         circleOptions.center(markerOptions.getPosition());
