@@ -1,8 +1,10 @@
 package org.sircular.proxalert.background;
 
 import android.Manifest;
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
@@ -12,6 +14,7 @@ import android.location.Location;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.IBinder;
+import android.os.SystemClock;
 import android.support.annotation.Nullable;
 import android.support.v4.app.NotificationCompat;
 import android.support.v4.content.ContextCompat;
@@ -38,7 +41,7 @@ public class LocationService extends Service implements LocationStore.UpdateList
     private long lastDelay = 0L;
     private Location lastLocation = null;
     private GoogleApiClient apiClient;
-    private Timer scheduleTimer;
+    private AlarmManager alarmManager;
     boolean currentlyInside = false;
     @Nullable
     @Override
@@ -53,7 +56,7 @@ public class LocationService extends Service implements LocationStore.UpdateList
                     .addApi(LocationServices.API)
                     .build();
         }
-        scheduleTimer = new Timer();
+        alarmManager = (AlarmManager) this.getSystemService(Context.ALARM_SERVICE);
         LocationStore.registerListener(this);
         LocationStore.initialize(this);
     }
@@ -63,7 +66,7 @@ public class LocationService extends Service implements LocationStore.UpdateList
         apiClient.connect();
         triggerLocationCheck();
 
-        return START_STICKY;
+        return START_NOT_STICKY;
     }
 
     @Override
@@ -92,14 +95,8 @@ public class LocationService extends Service implements LocationStore.UpdateList
 
     private void scheduleLocationCheck(Location currentLocation, Location lastLocation) {
         if (currentLocation == null) {
-            scheduleTimer.cancel();
-            scheduleTimer = new Timer();
-            scheduleTimer.schedule(new TimerTask() {
-                @Override
-                public void run() {
-                    triggerLocationCheck();
-                }
-            }, TimeUnit.SECONDS.toMillis(10));
+            alarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    SystemClock.elapsedRealtime()+TimeUnit.SECONDS.toMillis(10), generateTriggerPendingIntent());
             return;
         }
         List<ProxLocation> locations = LocationStore.getLocations();
@@ -125,15 +122,8 @@ public class LocationService extends Service implements LocationStore.UpdateList
                 if (!removed) {
                     long milliDelay = determineDelay(currentLocation, lastLocation, closestLocation, lastDelay);
                     lastDelay = milliDelay;
-                    System.out.println("Delay: "+milliDelay);
-                    scheduleTimer.cancel(); // so we only have one thing going at once
-                    scheduleTimer = new Timer();
-                    scheduleTimer.schedule(new TimerTask() {
-                        @Override
-                        public void run() {
-                            triggerLocationCheck();
-                        }
-                    }, milliDelay);
+                    alarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                            SystemClock.elapsedRealtime()+milliDelay, generateTriggerPendingIntent());
                 } // else the listener will reschedule
             }
         } else {
@@ -169,13 +159,14 @@ public class LocationService extends Service implements LocationStore.UpdateList
     private long determineDelay(Location currentLocation, Location lastLocation,
                                     ProxLocation destLocation, long lastDelay) {
         // m/ms
-        double velocity = (100*1000)/TimeUnit.HOURS.toMillis(1);
+        double velocity = (100*1000.0)/TimeUnit.HOURS.toMillis(1);
         if (lastDelay > 0 && lastLocation != null) {
             velocity = Math.max(velocity,
-                    (currentLocation.distanceTo(lastLocation)-destLocation.getRadius())/lastDelay);
+                    currentLocation.distanceTo(lastLocation)/lastDelay);
         }
         // extrapolate and halve
-        double estimatedTime = currentLocation.distanceTo(destLocation.getLocation())/(velocity*2);
+        double estimatedTime = Math.abs(currentLocation.distanceTo(destLocation.getLocation())
+                -destLocation.getRadius())/(velocity*2);
         return (long)Math.max(MIN_DELAY, Math.min(MAX_DELAY, estimatedTime));
     }
 
@@ -196,5 +187,10 @@ public class LocationService extends Service implements LocationStore.UpdateList
             }
         }
         return closestLocation;
+    }
+
+    private PendingIntent generateTriggerPendingIntent() {
+        return PendingIntent.getService(this, 79, new Intent(this.getApplicationContext(),
+                LocationService.class), PendingIntent.FLAG_CANCEL_CURRENT);
     }
 }
