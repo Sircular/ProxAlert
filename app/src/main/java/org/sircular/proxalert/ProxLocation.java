@@ -84,4 +84,14 @@ public class ProxLocation {
     public String toString() {
         return title;
     }
+
+    @Override
+    public boolean equals(Object object) {
+        if (object instanceof ProxLocation) {
+            ProxLocation other = (ProxLocation) object;
+            return this.title.equals(other.getTitle()) &&
+                    this.id == other.getId();
+        }
+        return false;
+    }
 }

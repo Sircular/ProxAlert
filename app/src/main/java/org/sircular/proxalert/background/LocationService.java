@@ -27,22 +27,27 @@ import org.sircular.proxalert.ProxAlertActivity;
 import org.sircular.proxalert.ProxLocation;
 import org.sircular.proxalert.R;
 
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * Created by walt on 7/30/16.
+ * Created by walt on 8/2/16.
  */
 public class LocationService extends Service implements LocationStore.UpdateListener {
     private final long MIN_DELAY = TimeUnit.SECONDS.toMillis(20);
     private final long MAX_DELAY = TimeUnit.MINUTES.toMillis(10);
-    private long lastDelay = 0L;
+    private final double MIN_VELOCITY = (100*1000.0)/TimeUnit.HOURS.toMillis(1); // m/ms
+
     private Location lastLocation = null;
     private GoogleApiClient apiClient;
     private AlarmManager alarmManager;
-    boolean currentlyInside = false;
+    private long lastTimestamp;
+    private Lock modificationLock; // to prevent scheduling while we're modifying all points
+    private List<ProxLocation> currentlyInside;
+
     @Nullable
     @Override
     public IBinder onBind(Intent intent) {
@@ -59,13 +64,28 @@ public class LocationService extends Service implements LocationStore.UpdateList
         alarmManager = (AlarmManager) this.getSystemService(Context.ALARM_SERVICE);
         LocationStore.registerListener(this);
         LocationStore.initialize(this);
+
+        lastTimestamp = SystemClock.elapsedRealtime();
+
+        modificationLock = new ReentrantLock();
+        currentlyInside = new ArrayList<>();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         apiClient.connect();
-        triggerLocationCheck();
-
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED) {
+            Location currentLocation = LocationServices.FusedLocationApi.getLastLocation(apiClient);
+            processLocations(currentLocation, lastLocation,
+                    SystemClock.elapsedRealtime(), lastTimestamp, LocationStore.getLocations());
+            lastLocation = currentLocation;
+            lastTimestamp = SystemClock.elapsedRealtime();
+        } else {
+            // this activity will request permission when it opens
+            Intent mainActivityIntent = new Intent(this, ProxAlertActivity.class);
+            this.startActivity(mainActivityIntent);
+        }
         return START_NOT_STICKY;
     }
 
@@ -76,65 +96,64 @@ public class LocationService extends Service implements LocationStore.UpdateList
 
     @Override
     public void onLocationUpdated(LocationStore.UPDATE_TYPE type, ProxLocation location) {
-        triggerLocationCheck();
-    }
-
-    public void triggerLocationCheck() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED) {
-            Location currentLocation = LocationServices.FusedLocationApi.getLastLocation(apiClient);
-            scheduleLocationCheck(currentLocation, lastLocation);
-            lastLocation = currentLocation;
-        } else {
-            // this activity will request permission when it opens
-            Intent mainActivityIntent = new Intent(this, ProxAlertActivity.class);
-            this.startActivity(mainActivityIntent);
+        if (modificationLock.tryLock()) {
+            scheduleLocationCheck(-10L); // it's in the past, so immediately
+            modificationLock.unlock();
         }
-
     }
 
-    private void scheduleLocationCheck(Location currentLocation, Location lastLocation) {
+    private void processLocations(Location currentLocation, Location lastLocation,
+                                  long currentTime, long lastTime, List<ProxLocation> proxLocations) {
+        modificationLock.lock();
+        // check for any changes and remove unused locations
+        for (ProxLocation proxLocation : currentlyInside) {
+            if (!proxLocations.contains(proxLocation)) {
+                currentlyInside.remove(proxLocation);
+            }
+        }
         if (currentLocation == null) {
-            alarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                    SystemClock.elapsedRealtime()+TimeUnit.SECONDS.toMillis(10), generateTriggerPendingIntent());
-            return;
-        }
-        List<ProxLocation> locations = LocationStore.getLocations();
-        if (locations.size() > 0) {
-            // select the nearest location
-            ProxLocation closestLocation = selectNearest(currentLocation, locations);
-            if (closestLocation != null) { // to be safe
+            scheduleLocationCheck(TimeUnit.SECONDS.toMillis(10));
+        } else if (proxLocations.size() > 0) {
+            // used later for calculating delay
+            double closestLocationThresholdDistance = Double.POSITIVE_INFINITY;
+            // determine which radii we're inside
+            for (ProxLocation proxLocation : proxLocations) {
                 boolean removed = false;
-                if (currentLocation.distanceTo(closestLocation.getLocation()) <= closestLocation.getRadius()) {
-                    if (!currentlyInside) {
-                        triggerNotification(closestLocation);
-                        if (closestLocation.isRecurring()) {
-                            currentlyInside = true;
-                        } else {
-                            LocationStore.removeLocation(closestLocation);
-                            LocationStore.saveLocations();
-                            removed = true;
+                double distance = currentLocation.distanceTo(proxLocation.getLocation())
+                        -proxLocation.getRadius();
+                boolean inside = distance <= 0;
+                double distanceToThreshold = Math.abs(distance);
+                if (inside) {
+                    if (proxLocation.isRecurring()) {
+                        if (!currentlyInside.contains(proxLocation)) {
+                            triggerNotification(proxLocation.getTitle());
+                            currentlyInside.add(proxLocation);
                         }
+                    } else {
+                        triggerNotification(proxLocation.getTitle());
+                        LocationStore.removeLocation(proxLocation);
+                        removed = true;
                     }
                 } else {
-                    currentlyInside = false;
+                    currentlyInside.remove(proxLocation);
                 }
                 if (!removed) {
-                    long milliDelay = determineDelay(currentLocation, lastLocation, closestLocation, lastDelay);
-                    lastDelay = milliDelay;
-                    alarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                            SystemClock.elapsedRealtime()+milliDelay, generateTriggerPendingIntent());
-                } // else the listener will reschedule
+                    if (distanceToThreshold < closestLocationThresholdDistance) {
+                        closestLocationThresholdDistance = distanceToThreshold;
+                    }
+                }
             }
-        } else {
-            currentlyInside = false; // just to make sure it's initialized properly
-        }
-        // otherwise, nothing needs to be scheduled
+            if (closestLocationThresholdDistance != Double.POSITIVE_INFINITY) {
+                scheduleLocationCheck(estimateDelay(currentLocation, lastLocation,
+                        closestLocationThresholdDistance, currentTime-lastTime));
+            }
+        } // nothing needs to be scheduled
+        modificationLock.unlock();
     }
 
-    private void triggerNotification(ProxLocation location) {
+    private void triggerNotification(String message) {
         NotificationCompat.Builder notificationBuilder = new NotificationCompat.Builder(this);
-        notificationBuilder.setContentText(location.getTitle());
+        notificationBuilder.setContentText(message);
         notificationBuilder.setContentTitle(this.getString(R.string.app_name));
         notificationBuilder.setSmallIcon(R.drawable.icon_small);
         // set up sound/vibrate
@@ -156,41 +175,21 @@ public class LocationService extends Service implements LocationStore.UpdateList
         manager.notify(1, notification);
     }
 
-    private long determineDelay(Location currentLocation, Location lastLocation,
-                                    ProxLocation destLocation, long lastDelay) {
-        // m/ms
-        double velocity = (100*1000.0)/TimeUnit.HOURS.toMillis(1);
+    private void scheduleLocationCheck(long time) {
+        PendingIntent intent = PendingIntent.getService(this, 79, new Intent(this.getApplicationContext(),
+                LocationService.class), PendingIntent.FLAG_CANCEL_CURRENT);
+        alarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime()+time, intent);
+    }
+
+    private long estimateDelay(Location currentLocation, Location lastLocation, double distance,
+                               long lastDelay) {
+        double velocity = MIN_VELOCITY;
         if (lastDelay > 0 && lastLocation != null) {
             velocity = Math.max(velocity,
                     currentLocation.distanceTo(lastLocation)/lastDelay);
         }
         // extrapolate and halve
-        double estimatedTime = Math.abs(currentLocation.distanceTo(destLocation.getLocation())
-                -destLocation.getRadius())/(velocity*2);
+        double estimatedTime = distance/(velocity*2);
         return (long)Math.max(MIN_DELAY, Math.min(MAX_DELAY, estimatedTime));
-    }
-
-    private ProxLocation selectNearest(Location currentLocation, List<ProxLocation> locations) {
-        ProxLocation closestLocation = null;
-        double closestDistance = Double.POSITIVE_INFINITY;
-        for (ProxLocation location : locations) {
-            double distance = currentLocation.distanceTo(location.getLocation());
-            if (closestLocation == null) {
-                closestLocation = location;
-                closestDistance = distance;
-            } else {
-
-                if (distance < closestDistance) {
-                    closestLocation = location;
-                    closestDistance = distance;
-                }
-            }
-        }
-        return closestLocation;
-    }
-
-    private PendingIntent generateTriggerPendingIntent() {
-        return PendingIntent.getService(this, 79, new Intent(this.getApplicationContext(),
-                LocationService.class), PendingIntent.FLAG_CANCEL_CURRENT);
     }
 }
