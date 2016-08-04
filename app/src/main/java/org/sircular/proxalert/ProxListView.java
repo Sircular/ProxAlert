@@ -1,5 +1,6 @@
 package org.sircular.proxalert;
 
+import android.location.Location;
 import android.os.Bundle;
 import android.support.v4.app.ListFragment;
 import android.support.v4.view.GravityCompat;
@@ -10,7 +11,7 @@ import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.ListView;
 
-public class ProxListView extends ListFragment {
+public class ProxListView extends ListFragment implements LocationStore.UpdateListener {
 
     private ArrayAdapter<ProxLocation> locationAdapter;
 
@@ -28,7 +29,7 @@ public class ProxListView extends ListFragment {
         locationAdapter.notifyDataSetChanged();
         this.setListAdapter(locationAdapter);
 
-
+        LocationStore.registerListener(this);
 
         return inflater.inflate(android.R.layout.list_content, container, false);
     }
@@ -41,5 +42,10 @@ public class ProxListView extends ListFragment {
         DrawerLayout drawer = (DrawerLayout) parent.findViewById(R.id.drawer_layout);
         if (drawer != null)
             drawer.closeDrawer(GravityCompat.START);
+    }
+
+    @Override
+    public void onLocationUpdated(LocationStore.UPDATE_TYPE type, ProxLocation location) {
+        locationAdapter.notifyDataSetChanged();
     }
 }
