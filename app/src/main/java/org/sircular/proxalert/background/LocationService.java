@@ -30,8 +30,6 @@ import org.sircular.proxalert.R;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Created by walt on 8/2/16.
@@ -45,7 +43,6 @@ public class LocationService extends Service implements LocationStore.UpdateList
     private GoogleApiClient apiClient;
     private AlarmManager alarmManager;
     private long lastTimestamp;
-    private Lock modificationLock; // to prevent scheduling while we're modifying all points
     private List<ProxLocation> currentlyInside;
 
     @Nullable
@@ -67,7 +64,6 @@ public class LocationService extends Service implements LocationStore.UpdateList
 
         lastTimestamp = SystemClock.elapsedRealtime();
 
-        modificationLock = new ReentrantLock();
         currentlyInside = new ArrayList<>();
     }
 
@@ -96,15 +92,12 @@ public class LocationService extends Service implements LocationStore.UpdateList
 
     @Override
     public void onLocationUpdated(LocationStore.UPDATE_TYPE type, ProxLocation location) {
-        if (modificationLock.tryLock()) {
-            scheduleLocationCheck(-10L); // it's in the past, so immediately
-            modificationLock.unlock();
-        }
+        if (type != LocationStore.UPDATE_TYPE.REMOVED) // no need to immediately reschedule
+            scheduleLocationCheck(0L);
     }
 
     private void processLocations(Location currentLocation, Location lastLocation,
                                   long currentTime, long lastTime, List<ProxLocation> proxLocations) {
-        modificationLock.lock();
         // check for any changes and remove unused locations
         for (ProxLocation proxLocation : currentlyInside) {
             if (!proxLocations.contains(proxLocation)) {
@@ -147,8 +140,7 @@ public class LocationService extends Service implements LocationStore.UpdateList
                 scheduleLocationCheck(estimateDelay(currentLocation, lastLocation,
                         closestLocationThresholdDistance, currentTime-lastTime));
             }
-        } // nothing needs to be scheduled
-        modificationLock.unlock();
+        }
     }
 
     private void triggerNotification(String message) {
