@@ -1,7 +1,6 @@
 package org.sircular.proxalert.background;
 
 import android.Manifest;
-import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -13,13 +12,15 @@ import android.graphics.Color;
 import android.location.Location;
 import android.media.AudioManager;
 import android.net.Uri;
+import android.os.Bundle;
 import android.os.IBinder;
-import android.os.SystemClock;
 import android.support.annotation.Nullable;
 import android.support.v4.app.NotificationCompat;
 import android.support.v4.content.ContextCompat;
 
 import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.location.LocationRequest;
+import com.google.android.gms.location.LocationResult;
 import com.google.android.gms.location.LocationServices;
 
 import org.sircular.proxalert.LocationStore;
@@ -30,20 +31,23 @@ import org.sircular.proxalert.R;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Created by walt on 8/2/16.
  */
-public class LocationService extends Service implements LocationStore.UpdateListener {
-    private final long MIN_DELAY = TimeUnit.SECONDS.toMillis(20);
-    private final long MAX_DELAY = TimeUnit.MINUTES.toMillis(10);
-    private final double MIN_VELOCITY = (100*1000.0)/TimeUnit.HOURS.toMillis(1); // m/ms
+public class LocationService extends Service implements LocationStore.UpdateListener,
+        GoogleApiClient.ConnectionCallbacks {
+    private final long MIN_DELAY = TimeUnit.SECONDS.toMillis(15);
+    private final long MAX_DELAY = TimeUnit.MINUTES.toMillis(20);
+    private final double ESTIMATED_VELOCITY = (100*1000.0)/TimeUnit.HOURS.toMillis(1); // m/ms
 
-    private Location lastLocation = null;
     private GoogleApiClient apiClient;
-    private AlarmManager alarmManager;
-    private long lastTimestamp;
+    private PendingIntent requestCallback;
     private List<ProxLocation> currentlyInside;
+    private Lock modificationLock;
+    private long lastDelay = 1L; // to prevent divide-by-zero errors
 
     @Nullable
     @Override
@@ -58,30 +62,30 @@ public class LocationService extends Service implements LocationStore.UpdateList
                     .addApi(LocationServices.API)
                     .build();
         }
-        alarmManager = (AlarmManager) this.getSystemService(Context.ALARM_SERVICE);
         LocationStore.registerListener(this);
         LocationStore.initialize(this);
 
-        lastTimestamp = SystemClock.elapsedRealtime();
-
         currentlyInside = new ArrayList<>();
+        modificationLock = new ReentrantLock();
+
+        Intent intent = new Intent(this, LocationService.class);
+        requestCallback = PendingIntent.getService(this, 50, intent, PendingIntent.FLAG_UPDATE_CURRENT);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        apiClient.connect();
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED) {
-            Location currentLocation = LocationServices.FusedLocationApi.getLastLocation(apiClient);
-            processLocations(currentLocation, lastLocation,
-                    SystemClock.elapsedRealtime(), lastTimestamp, LocationStore.getLocations());
-            lastLocation = currentLocation;
-            lastTimestamp = SystemClock.elapsedRealtime();
-        } else {
-            // this activity will request permission when it opens
-            Intent mainActivityIntent = new Intent(this, ProxAlertActivity.class);
-            this.startActivity(mainActivityIntent);
+        if (!(apiClient.isConnected() || apiClient.isConnecting())) {
+            apiClient.connect();
+            apiClient.registerConnectionCallbacks(this);
         }
+        if (LocationResult.hasResult(intent)) {
+            if (modificationLock.tryLock()) {
+                processLocations(LocationResult.extractResult(intent).getLastLocation(),
+                        LocationStore.getLocations());
+                modificationLock.unlock();
+            }
+        }
+
         return START_NOT_STICKY;
     }
 
@@ -93,11 +97,10 @@ public class LocationService extends Service implements LocationStore.UpdateList
     @Override
     public void onLocationUpdated(LocationStore.UPDATE_TYPE type, ProxLocation location) {
         if (type != LocationStore.UPDATE_TYPE.REMOVED) // no need to immediately reschedule
-            scheduleLocationCheck(0L);
+            scheduleLocationUpdates(0L);
     }
 
-    private void processLocations(Location currentLocation, Location lastLocation,
-                                  long currentTime, long lastTime, List<ProxLocation> proxLocations) {
+    private void processLocations(Location currentLocation, List<ProxLocation> proxLocations) {
         // check for any changes and remove unused locations
         for (ProxLocation proxLocation : currentlyInside) {
             if (!proxLocations.contains(proxLocation)) {
@@ -105,7 +108,7 @@ public class LocationService extends Service implements LocationStore.UpdateList
             }
         }
         if (currentLocation == null) {
-            scheduleLocationCheck(TimeUnit.SECONDS.toMillis(10));
+            scheduleLocationUpdates(TimeUnit.SECONDS.toMillis(10));
         } else if (proxLocations.size() > 0) {
             // used later for calculating delay
             double closestLocationThresholdDistance = Double.POSITIVE_INFINITY;
@@ -137,9 +140,10 @@ public class LocationService extends Service implements LocationStore.UpdateList
                 }
             }
             if (closestLocationThresholdDistance != Double.POSITIVE_INFINITY) {
-                scheduleLocationCheck(estimateDelay(currentLocation, lastLocation,
-                        closestLocationThresholdDistance, currentTime-lastTime));
+                scheduleLocationUpdates(estimateDelay(closestLocationThresholdDistance));
             }
+            if (proxLocations.size() == 0) // it could have changed in te previous code
+                unscheduleLocationUpdates();
         }
     }
 
@@ -167,21 +171,53 @@ public class LocationService extends Service implements LocationStore.UpdateList
         manager.notify(1, notification);
     }
 
-    private void scheduleLocationCheck(long time) {
-        PendingIntent intent = PendingIntent.getService(this, 79, new Intent(this.getApplicationContext(),
-                LocationService.class), PendingIntent.FLAG_CANCEL_CURRENT);
-        alarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime()+time, intent);
+    private void scheduleLocationUpdates(long time) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED) {
+            if (time < MIN_DELAY) { // assume we want a one-off request
+                unscheduleLocationUpdates();
+                final LocationRequest request = new LocationRequest()
+                        .setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY)
+                        .setNumUpdates(1);
+                LocationServices.FusedLocationApi.requestLocationUpdates(apiClient, request, requestCallback);
+            } else {
+                double percentChange = Math.abs(time-lastDelay)/(double)lastDelay;
+                if (percentChange > 0.1) {
+                    unscheduleLocationUpdates();
+                    final LocationRequest request = new LocationRequest()
+                            .setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY)
+                            .setInterval(time)
+                            .setFastestInterval(time/2)
+                            .setMaxWaitTime((long)(time*1.2));
+                    LocationServices.FusedLocationApi.requestLocationUpdates(apiClient, request, requestCallback);
+                    lastDelay = time;
+                }
+            }
+        } else {
+            // this activity will request permission when it opens
+            Intent mainActivityIntent = new Intent(this, ProxAlertActivity.class);
+            this.startActivity(mainActivityIntent);
+        }
     }
 
-    private long estimateDelay(Location currentLocation, Location lastLocation, double distance,
-                               long lastDelay) {
-        double velocity = MIN_VELOCITY;
-        if (lastDelay > 0 && lastLocation != null) {
-            velocity = Math.max(velocity,
-                    currentLocation.distanceTo(lastLocation)/lastDelay);
-        }
+    private void unscheduleLocationUpdates() {
+        LocationServices.FusedLocationApi.removeLocationUpdates(apiClient, requestCallback);
+        lastDelay = 1L;
+    }
+
+    private long estimateDelay(double distance) {
         // extrapolate and halve
-        double estimatedTime = distance/(velocity*2);
+        double estimatedTime = distance/(ESTIMATED_VELOCITY*2);
         return (long)Math.max(MIN_DELAY, Math.min(MAX_DELAY, estimatedTime));
+    }
+
+    @Override
+    public void onConnected(@Nullable Bundle bundle) {
+        scheduleLocationUpdates(1000L);
+    }
+
+    @Override
+    public void onConnectionSuspended(int i) {
+
     }
 }
