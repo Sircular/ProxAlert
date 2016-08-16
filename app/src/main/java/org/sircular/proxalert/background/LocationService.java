@@ -45,9 +45,9 @@ public class LocationService extends Service implements LocationStore.UpdateList
 
     private GoogleApiClient apiClient;
     private PendingIntent requestCallback;
-    private List<ProxLocation> currentlyInside;
     private Lock modificationLock;
     private long lastDelay = 1L; // to prevent divide-by-zero errors
+    private Location lastLocation = null;
 
     @Nullable
     @Override
@@ -65,7 +65,6 @@ public class LocationService extends Service implements LocationStore.UpdateList
         LocationStore.registerListener(this);
         LocationStore.initialize(this);
 
-        currentlyInside = new ArrayList<>();
         modificationLock = new ReentrantLock();
 
         Intent intent = new Intent(this, LocationService.class);
@@ -101,12 +100,6 @@ public class LocationService extends Service implements LocationStore.UpdateList
     }
 
     private void processLocations(Location currentLocation, List<ProxLocation> proxLocations) {
-        // check for any changes and remove unused locations
-        for (ProxLocation proxLocation : currentlyInside) {
-            if (!proxLocations.contains(proxLocation)) {
-                currentlyInside.remove(proxLocation);
-            }
-        }
         if (currentLocation == null) {
             scheduleLocationUpdates(TimeUnit.SECONDS.toMillis(10));
         } else if (proxLocations.size() > 0) {
@@ -121,17 +114,15 @@ public class LocationService extends Service implements LocationStore.UpdateList
                 double distanceToThreshold = Math.abs(distance);
                 if (inside) {
                     if (proxLocation.isRecurring()) {
-                        if (!currentlyInside.contains(proxLocation)) {
+                        if (lastLocation == null || lastLocation.distanceTo(proxLocation.getLocation())
+                                > proxLocation.getRadius()) {
                             triggerNotification(proxLocation.getTitle());
-                            currentlyInside.add(proxLocation);
                         }
                     } else {
                         triggerNotification(proxLocation.getTitle());
                         LocationStore.removeLocation(proxLocation);
                         removed = true;
                     }
-                } else {
-                    currentlyInside.remove(proxLocation);
                 }
                 if (!removed) {
                     if (distanceToThreshold < closestLocationThresholdDistance) {
@@ -144,7 +135,9 @@ public class LocationService extends Service implements LocationStore.UpdateList
             }
             if (proxLocations.size() == 0) // it could have changed in te previous code
                 unscheduleLocationUpdates();
+            LocationStore.saveLocations();
         }
+        lastLocation = currentLocation;
     }
 
     private void triggerNotification(String message) {
@@ -201,8 +194,11 @@ public class LocationService extends Service implements LocationStore.UpdateList
     }
 
     private void unscheduleLocationUpdates() {
-        LocationServices.FusedLocationApi.removeLocationUpdates(apiClient, requestCallback);
-        lastDelay = 1L;
+        if (apiClient.isConnected()) {
+            LocationServices.FusedLocationApi.removeLocationUpdates(apiClient, requestCallback);
+            lastDelay = 1L;
+        } else if (!apiClient.isConnecting())
+            apiClient.connect();
     }
 
     private long estimateDelay(double distance) {
