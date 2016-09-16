@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.location.Location;
@@ -28,7 +29,6 @@ import org.sircular.proxalert.ProxAlertActivity;
 import org.sircular.proxalert.ProxLocation;
 import org.sircular.proxalert.R;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
@@ -39,7 +39,7 @@ import java.util.concurrent.locks.ReentrantLock;
  */
 public class LocationService extends Service implements LocationStore.UpdateListener,
         GoogleApiClient.ConnectionCallbacks {
-    private final long MIN_DELAY = TimeUnit.SECONDS.toMillis(15);
+    private final long MIN_DELAY = TimeUnit.SECONDS.toMillis(30);
     private final long MAX_DELAY = TimeUnit.MINUTES.toMillis(20);
     private final double ESTIMATED_VELOCITY = (100*1000.0)/TimeUnit.HOURS.toMillis(1); // m/ms
 
@@ -114,6 +114,17 @@ public class LocationService extends Service implements LocationStore.UpdateList
                 double distanceToThreshold = Math.abs(distance);
                 if (inside) {
                     if (proxLocation.isRecurring()) {
+                        if (lastLocation == null) {
+                            SharedPreferences sharedPreferences = getSharedPreferences(
+                                    getString(R.string.location_prefs_file), Context.MODE_PRIVATE);
+                            if (sharedPreferences.contains("lat") && sharedPreferences.contains("lon")) {
+                                double lat = Double.longBitsToDouble(sharedPreferences.getLong("lat", 0L));
+                                double lon = Double.longBitsToDouble(sharedPreferences.getLong("lon", 0L));
+                                lastLocation = new Location("");
+                                lastLocation.setLatitude(lat);
+                                lastLocation.setLongitude(lon);
+                            }
+                        }
                         if (lastLocation == null || lastLocation.distanceTo(proxLocation.getLocation())
                                 > proxLocation.getRadius()) {
                             triggerNotification(proxLocation.getTitle());
@@ -138,6 +149,14 @@ public class LocationService extends Service implements LocationStore.UpdateList
             LocationStore.saveLocations();
         }
         lastLocation = currentLocation;
+        // save the location in case its memory gets freed
+        SharedPreferences sharedPreferences = getSharedPreferences(
+                getString(R.string.location_prefs_file), Context.MODE_PRIVATE);
+        SharedPreferences.Editor editor = sharedPreferences.edit();
+        editor.putLong("lat", Double.doubleToRawLongBits(lastLocation.getLatitude())); //Wtf why
+        editor.putLong("lon", Double.doubleToRawLongBits(lastLocation.getLongitude()));
+        editor.apply();
+
     }
 
     private void triggerNotification(String message) {
