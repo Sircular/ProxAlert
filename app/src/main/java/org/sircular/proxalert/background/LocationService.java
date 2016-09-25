@@ -15,6 +15,7 @@ import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.provider.Settings;
 import android.support.annotation.Nullable;
 import android.support.v4.app.NotificationCompat;
 import android.support.v4.content.ContextCompat;
@@ -73,15 +74,19 @@ public class LocationService extends Service implements LocationStore.UpdateList
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (!(apiClient.isConnected() || apiClient.isConnecting())) {
-            apiClient.connect();
-            apiClient.registerConnectionCallbacks(this);
-        }
-        if (LocationResult.hasResult(intent)) {
-            if (modificationLock.tryLock()) {
-                processLocations(LocationResult.extractResult(intent).getLastLocation(),
-                        LocationStore.getLocations());
-                modificationLock.unlock();
+        // detect airplane mode
+        if (Settings.Global.getInt(this.getApplicationContext().getContentResolver(),
+                Settings.Global.AIRPLANE_MODE_ON, 0) != 0) {
+            if (!(apiClient.isConnected() || apiClient.isConnecting())) {
+                apiClient.connect();
+                apiClient.registerConnectionCallbacks(this);
+            }
+            if (LocationResult.hasResult(intent)) {
+                if (modificationLock.tryLock()) {
+                    processLocations(LocationResult.extractResult(intent).getLastLocation(),
+                            LocationStore.getLocations());
+                    modificationLock.unlock();
+                }
             }
         }
 
@@ -207,7 +212,9 @@ public class LocationService extends Service implements LocationStore.UpdateList
             }
         } else {
             // this activity will request permission when it opens
-            Intent mainActivityIntent = new Intent(this, ProxAlertActivity.class);
+            Context context = this.getApplicationContext();
+            Intent mainActivityIntent = new Intent(context, ProxAlertActivity.class);
+            mainActivityIntent.setFlags(Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT | Intent.FLAG_ACTIVITY_NEW_TASK);
             this.startActivity(mainActivityIntent);
         }
     }
